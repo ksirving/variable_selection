@@ -1,0 +1,986 @@
+---
+title: "BRT_variable_selection_and_correlation"
+output: html_document
+---
+#  Boosted Regression Tree (BRTs) - Variable selection method
+#  This R script contains the variable selection method outlined in Irving et al 2019
+#  to choose both customised and uniform predictor sets, as well as correlation analysis.
+#  the script is an example on a community of 3 species and intended as a guide to the variable selection process
+#  
+
+#  please install and upload the following packages
+
+```{r}
+install.packages("dismo")
+install.packages("rgdal")
+install.packages("raster")
+install.packages("maptools")
+install.packages("reshape")
+install.packages("caret")
+
+library(dismo)
+library(rgdal)
+library(raster)
+library(maptools)
+library(reshape)
+library(caret)
+```
+
+#  1st round of BRTs is every predictor set separately e.g. climate only. 
+#  script below for one predictor category as an example
+#  environmental predictors need to be in raster format (e.g. earthenv.org or IHA metrics are readily downloadable in this format)
+
+#  upload rasters
+
+```{r}
+setwd("yourdirectory/rasters")
+
+r1 <- raster("Climate_var1")
+r2 <- raster("Climate_var2")
+r3 <- raster("Climate_var3")
+
+#  stack all raster
+preds <- stack(r1,r2,r3)
+```
+
+#  species data needs to be a spatial points dataframe with presence/absence or presence only
+#  if presence only, zeros need to be added. 
+#  suggestion: add zeros for the remaining sample sites without presences
+#  example
+
+```{r}
+study_area #  object with all sample site coordinates
+presences # object with all presence sites coordinates
+#  add a coord code to both dataframes
+study_area$coord_code <- paste(study_area$X, "_", study_area$Y, sep="")
+presences$coord_code <- paste(presences$X, "_", presences$Y, sep="")
+
+presences$species <- 1 # add column of presences
+
+## merge both dataframes by coord code
+data <- merge(study_area, presences, by="coord_code", all=T)
+#  remove unwanted columns - coordinates and species needed only
+data <- data[, -c(3,4,5,6)] 
+data[is.na(data)] <- 0 ## change NAs to 0. dataframe will have binary info now
+
+#  convert to spatial points dataframe
+
+coordinates(data) <- C("X", "Y")
+#  extract environmental data from rasters at sampling sites
+sx2 <-raster::extract(preds,data) ## extract info from environamtal raster at sampling sites
+df <- cbind(data, sx2) ## combine data for species and variables, creates format dataframe as needed for brt
+df <- na.omit(df)
+
+df # dataframe formatted for BRTs
+```
+#  dataframe will now be formatted in species presense/absence (1/0), with coordinates 
+# of sampling sites and environmental variables. Example: 
+
+# # X        Y                    species    Climate_var1    Climate_var2    Climate_var3
+# 1 10.00417 50.89583                   1              84              81              32
+# 2 10.00417 51.21250                   0              87              80              32
+# 3 10.00417 51.25417                   0              84              82              33
+# 4 10.00417 52.43750                   1              74              70              29
+# 5 10.01250 50.62917                   0              68              67              29
+# 6 10.01250 50.90417                   0              78              71              30
+
+#  BRTs
+
+```{r}
+#  creat dataframe for BRT coefficients
+coefs <- data.frame(matrix(ncol=6))
+colnames(coefs) <- c("taxa", "no_of_trees", "dev_mean", "cor_mean", "discrim_mean", "cv_thres")
+#  more coefficients are available check cv.statistics
+tbrt <- gbm.step(data, gbm.x = 4:6, gbm.y = 3, family ="bernoulli", tree.complexity = 5, learning.rate = 0.0001, bag.fraction = 0.5) 
+
+#  df = dataframe as above
+#  gbm.x = 4:6 - the environmental variables in the dataframe
+#  gbm.y = 3 - the species presence/absence
+#  BRT criteria can be changed according to needs. Please check ?gbm.step and Elith et al (2008) 
+
+var_imp <- as.data.frame(summary(tbrt)) # Variable importance dataframe
+#  var_imp should be formatted as below
+
+# var           rel.inf
+# Climate_var1  25.2409052
+# Climate_var3  12.9871157
+# Climate_var2  8.9114047
+
+tbrt$cv.statistics$cv.threshold #  BRT coefficients
+
+#  puts coefficients information in a dataframe
+coefs[1,1] <- "species name" #  add species name
+coefs[1,2] <- tbrt$n.trees
+coefs[1,3] <- tbrt$cv.statistics$deviance.mean
+coefs[1,4] <- tbrt$cv.statistics$correlation.mean
+coefs[1,5] <- tbrt$cv.statistics$discrimination.mean
+coefs[1,6] <- tbrt$cv.statistics$cv.threshold
+
+#  save both 
+
+save(var_imp, file="yourdirectory/filename_var_imp.RData")
+save(coefs, file="yourdirectory/filename2_coefs.RData")
+
+
+```
+
+#   repeat for each species in the community
+#  below is an example for each loop for a guide
+
+```{r}
+species # list of species names as in filenames
+study_area #  dataframe with all sample site coordinates
+study_area$coord_code <- paste(study_area$X, "_", study_area$Y, sep="")#  add a coord code
+
+for( i in 1: length(species)) {
+  
+  
+  # if presence only data
+  presences <- read.csv("yourdirectory/file_species1.csv") # upload file of species presences
+  
+  #  add a coord code 
+  
+  presences$coord_code <- paste(presences$X, "_", presences$Y, sep="")
+  
+  presences$species <- 1 # add column of presences
+  
+  ## merge both dataframes by coord code
+  data <- merge(study_area, presences, by="coord_code", all=T)
+  #  remove unwanted columns - coordinates and species needed only
+  data <- data[, -c(3,4,5,6)] 
+  data[is.na(data)] <- 0 ## change NAs to 0. dataframe will have binary info now
+  
+  # if presence/absence data 
+  data  <- read.csv("yourdirectory/file_species1.csv") 
+  #  convert to spatial points dataframe
+  
+  coordinates(data) <- C("X", "Y")
+  #  extract environmental data from rasters at sampling sites
+  sx2 <-raster::extract(preds,data) ## extract info from environamtal raster at sampling sites
+  df <- cbind(data, sx2) ## combine data for species and variables, creates format dataframe as needed for brt
+  df <- na.omit(df)
+  
+  
+  tbrt <- gbm.step(df, gbm.x = 4:6, gbm.y = 3, family ="bernoulli", tree.complexity = 5, learning.rate = 0.0001, bag.fraction = 0.5) 
+  
+  var_imp <- as.data.frame(summary(tbrt)) # Variable importance dataframe
+  
+  tbrt$cv.statistics$cv.threshold #  BRT coefficients
+  
+  #  puts coefficients information in a dataframe
+  coefs[1,1] <- "species name" #  add species name
+  coefs[1,2] <- tbrt$n.trees
+  coefs[1,3] <- tbrt$cv.statistics$deviance.mean
+  coefs[1,4] <- tbrt$cv.statistics$correlation.mean
+  coefs[1,5] <- tbrt$cv.statistics$discrimination.mean
+  coefs[1,6] <- tbrt$cv.statistics$cv.threshold
+  
+  #  save both 
+  
+  save(var_imp2, file=paste("yourdirectory/filename_var_imp2_", species[i],".RData", sep=""))
+  save(coefs2, file=paste("yourdirectory/filename_coefs2_", species[i],".RData", sep=""))
+  
+  rm(var_imp)
+  rm(coefs)
+  
+  
+}
+
+
+#   repeat for each predictor category
+
+```
+
+#   repeat for each predictor category
+
+```{r}
+#  combine variable importance for each species
+
+setwd("yourdirectory")
+
+
+cl <- list.files(pattern="var_imp") #  list all species files. change pattern="var_imp" according to filename
+
+load(file=paste(cl[1])) ## var_imp (name of file)
+
+var_impx <- var_imp ## new var_imp object to accumulate dataframes
+
+var_impx <- var_impx[order(var_impx$var),] ## order by variable name 
+
+for(c in 2:length(cl)) {
+  
+  cat("Running site", c, "\n")
+  load(file=paste(cl[c])) ## var_imp ## load file
+  colnames(var_imp)[1] <- "var" ## 1st column called var 
+  var_imp<- var_imp[order(var_imp$var),]## order by variable name
+  
+  
+  sp <- colnames(var_imp)[2] ## get species name
+  
+  var_imp <- var_imp[, -1] ## remove variable column
+  
+  var_impx <- cbind(var_impx, var_imp)  ## combine by column
+  colnames(var_impx)[1+c] <- sp ## add species name
+  
+  
+}
+
+#  save file
+save(var_impx, file="yourdirectory/filename.RData")
+
+#           var               species 1        species 2       species 3
+# 1 climate var1            3.196427          9.731135         6.516256
+# 2 climate var2            5.743172          1.963038         4.256472
+# 3 climate var3           2.299511          1.202297         2.243538
+
+```
+#  repeat for all predictor categories
+
+#  for customised predictor set the variable importance values for each species will be taken
+#  to create a uniform predictor set 
+
+```{r}
+var_impx$mean <- rowMeans(var_impx[2:4]) ## average across all variables
+
+```
+
+#           var               species 1        species 2       species 3
+# 1 climate var1            3.196427          9.731135         6.516256
+# 2 climate var2            5.743172          1.963038         4.256472
+# 3 climate var3           2.299511          1.202297         2.243538#    
+# mean
+ # 6.481273
+ # 3.987561
+ # 1.915116
+
+#  mean column is the variable importance for the community
+
+# subset only community variable importance and take most important variables
+
+```{r}
+sp1 <- clim2[, c(1, 5)]
+sp1 <- sp1[order(sp1[,2]),]
+#  extract the most important 30 % variables 
+#  in this example it is 1, however if the predictor set has e.g. 19 variables, the 
+#  top 30% would be 6
+topvars <- tail(sp1, 1) ## 30% of 3
+
+#  topvars contains the most important variables for the community for this predictor category
+
+
+```
+```{r}
+#  save file
+save(topvars, file="yourdirectory/filename.RData")
+```
+#  2nd run of BRTs - all remaining predictors i.e. most important 30% from each predictor category
+
+# # X        Y                    species    Climate_var1    hydrology_var1    topography_var1
+# 1 10.00417 50.89583                   1              84              81              32
+# 2 10.00417 51.21250                   0              87              80              32
+# 3 10.00417 51.25417                   0              84              82              33
+# 4 10.00417 52.43750                   1              74              70              29
+# 5 10.01250 50.62917                   0              68              67              29
+# 6 10.01250 50.90417                   0              78              71              30
+
+```{r}
+#  upload rasters as above but with all top predictors
+#  get list of all predictors
+
+setwd("youdirectory/climaterasters")
+cp <- list.files(pattern=".tif")
+
+
+setwd("youdirectory/hydrologyrasters")
+hp <- list.files(pattern=".tif")
+hp
+
+setwd("youdirectory/topographyrasters")
+tp <- list.files(pattern=".tif")
+
+#  stack rasters from each category
+
+load("yourdirectory/filename.RData") ## topvars climate
+canx <- topvars
+var_list <- droplevels(canx$var)
+
+
+setwd("youdirectory/climaterasters")
+
+c <- grep(paste0(var_list, ".tif", collapse="|"),   cp)
+cpx <- cp[c]
+cpr <- stack(cpx)
+
+
+load("yourdirectory/filename.RData") ## topvars hydrology
+hanx <- topvars
+var_list <- droplevels(hanx$var)
+
+
+setwd("youdirectory/hydrologyrasters")
+
+h <- grep(paste0(var_list, ".tif", collapse="|"),   hp)
+hpx <- hp[h]
+hpr <- stack(hpx)
+
+load("yourdirectory/filename.RData") ## topvars topography
+tanx <- topvars
+var_list <- droplevels(tanx$var)
+var_list
+
+setwd("youdirectory/topographyrasters")
+
+t <- grep(paste0(var_list, ".tif", collapse="|"),   tp)
+tpx <- tp[t]
+tpr <- stack(tpx)
+
+preds <- stack(cpr,hpr.tpr)
+
+
+```
+
+# species data as above (1st run BRTs)
+
+```{r}
+#  for loop to run each species
+
+species # list of species names as in filenames
+study_area #  dataframe with all sample site coordinates
+study_area$coord_code <- paste(study_area$X, "_", study_area$Y, sep="")#  add a coord code
+
+for( i in 1: length(species)) {
+  
+  
+  # if presence only data
+  presences <- read.csv("yourdirectory/file_species1.csv") # upload file of species presences
+  
+  #  add a coord code 
+  
+  presences$coord_code <- paste(presences$X, "_", presences$Y, sep="")
+  
+  presences$species <- 1 # add column of presences
+  
+  ## merge both dataframes by coord code
+  data <- merge(study_area, presences, by="coord_code", all=T)
+  #  remove unwanted columns - coordinates and species needed only
+  data <- data[, -c(3,4,5,6)] 
+  data[is.na(data)] <- 0 ## change NAs to 0. dataframe will have binary info now
+  
+  # if presence/absence data 
+  data  <- read.csv("yourdirectory/file_species1.csv") 
+  #  convert to spatial points dataframe
+  
+  coordinates(data) <- C("X", "Y")
+  #  extract environmental data from rasters at sampling sites
+  sx2 <-raster::extract(preds,data) ## extract info from environamtal raster at sampling sites
+  df <- cbind(data, sx2) ## combine data for species and variables, creates format dataframe as needed for brt
+  df <- na.omit(df)
+  
+  
+  tbrt <- gbm.step(df, gbm.x = 4:6, gbm.y = 3, family ="bernoulli", tree.complexity = 5, learning.rate = 0.0001, bag.fraction = 0.5) 
+  
+  var_imp <- as.data.frame(summary(tbrt)) # Variable importance dataframe
+  
+  tbrt$cv.statistics$cv.threshold #  BRT coefficients
+  
+  #  puts coefficients information in a dataframe
+  coefs[1,1] <- "species name" #  add species name
+  coefs[1,2] <- tbrt$n.trees
+  coefs[1,3] <- tbrt$cv.statistics$deviance.mean
+  coefs[1,4] <- tbrt$cv.statistics$correlation.mean
+  coefs[1,5] <- tbrt$cv.statistics$discrimination.mean
+  coefs[1,6] <- tbrt$cv.statistics$cv.threshold
+  
+  #  save both 
+  
+  save(var_imp2, file=paste("yourdirectory/filename_var_imp2_", species[i],".RData", sep=""))
+  save(coefs2, file=paste("yourdirectory/filename_coefs2_", species[i],".RData", sep=""))
+  
+  rm(var_imp)
+  rm(coefs)
+  
+  
+}
+
+```
+
+
+
+#  merge all species variable importance together in one file for correlation
+
+```{r}
+#  directory where var_imp from 2nd brt run saved
+setwd("yourdirectory/file")
+
+ul <- list.files(pattern="var_imp")# list of all species variable importance files
+
+```
+```{r}
+## make dataframe to add all dfs together
+b_resx <- data.frame(matrix(nrow=3, ncol=2)) # nrow is number of variables
+colnames(b_resx)[1] <- "var"
+
+```
+
+```{r}
+### format first file
+
+setwd("youdirectory/file")
+load(file=paste(ul[1])) ## var_imp
+#  all variables as column 
+b_resx[, 1] <-  var_imp$var 
+
+b_resx <- merge(b_resx, var_imp, by="var", all=T)# merge dataframes
+b_resx <- b_resx[, c(1, 3)] # take only needed columns
+sp <- colnames(var_imp)[2] #  species name
+colnames(b_resx)[2] <- sp # add species name to new dataframe
+
+# loop all files together
+
+for(c in 2:length(ul)) {
+  
+  cat("Running site", c, "\n")
+  load(file=paste(ul[c])) ## var_imp ## load file
+  
+  colnames(var_imp)[1] <- "var" ## 1st colum called var - taxa with no brt have no name
+  var_imp <- var_imp[order(var_imp$var),]## order by variable name
+  # dim(b_res)
+  bx <- dim(var_imp)[1]
+  
+  sp <- colnames(var_imp)[2] ## get species name
+  
+    var_imp <- var_imp[, -1] ## remove variable column
+  
+  
+    b_resx <- cbind(b_resx, var_imp)  ## combine by column
+  
+    colnames(b_resx)[1+c] <- sp ## add species name
+  
+  
+}
+
+
+write.csv(b_resx, "yourdirectory/all_var_imp_uniform.csv")
+
+```
+
+#  correlation analysis for uniform predictor set
+# for this predictor set the correlation only need to be done once
+
+```{r}
+#  upload variable importance for all species
+all_preds <- read.csv("yourdirectory/all_var_imp_uniform.csv")
+all_preds <- all_preds[, -1] #  remove x column
+
+all_preds$mean <- rowMeans(all_preds[2:4])  #  average over species for community variable importance
+
+
+## make df for correlation
+vdf <- data.frame(matrix(nrow=3, ncol=1))
+vdf[,1] <- all_preds[, 1] # add variables as first column
+
+colnames(vdf)[1] <- "Variables"
+ 
+top_vars <- all_preds[, c(1, 5)] # community variable importance
+
+
+var_list <- all_preds[, 1] # list all variables
+
+```
+
+#  get list of all predictors
+#  this was done above, so may not be needed again here
+
+```{r}
+
+
+setwd("youdirectory/climaterasters")
+cp <- list.files(pattern=".tif")
+
+
+setwd("youdirectory/hydrologyrasters")
+hp <- list.files(pattern=".tif")
+
+
+setwd("youdirectory/topographyrasters")
+tp <- list.files(pattern=".tif")
+
+#  load variables according to var_list
+
+
+setwd("youdirectory/climaterasters")
+
+c <- grep(paste0(var_list, ".tif", collapse="|"),   cp)
+cpx <- cp[c]
+cpr <- stack(cpx)
+
+
+setwd("youdirectory/hydrologyrasters")
+
+h <- grep(paste0(var_list, ".tif", collapse="|"),   hp)
+hpx <- hp[h]
+hpr <- stack(hpx)
+
+
+setwd("youdirectory/topographyrasters")
+
+t <- grep(paste0(var_list, ".tif", collapse="|"),   tp)
+tpx <- tp[t]
+tpr <- stack(tpx)
+
+#  stack all predictors
+preds <- stack(cpr,hpr.tpr)
+
+#  covert to dataframe
+preds_df <- as.data.frame(preds)
+preds_df <- na.omit(preds_df)
+```
+
+###### multicolinearality
+
+```{r}
+df2 = cor(preds_df)
+
+df2 <- as.data.frame(df2)
+
+
+df2$var <- rownames(df2)
+cor_imp <- merge(topvars, df2, by="var")
+
+## make dataframe in order of relative importance
+cor_imp <- cor_imp[order(cor_imp[,2], decreasing=TRUE),]
+
+## remove minus signs from data frame 
+cor_imp[] <- lapply(cor_imp, function(x) gsub("-", "", x ))
+## change from character to number
+cor_imp[, 2:25] <- lapply(cor_imp[,2:25], function(x) as.numeric(as.character(x)))
+
+### if over 0.7 take the variable with the higher importance
+
+## reshape dataframe
+colnames(cor_imp)[2] <- "importance"
+cor_imp <- melt(cor_imp, id=c("var", "importance"))
+cor_imp$importance2 <- NA
+
+v <- cor_imp$var
+## df column for importance of variable 2 
+for(d in 1: length(v)) {
+  
+  v1 <- v[d]
+  imp <- cor_imp$importance[d] 
+  v2 <- cor_imp$variable %in% v1
+  cor_imp$importance2[v2] <- paste(imp)
+  
+}
+
+
+cor_imp <- na.omit(cor_imp)
+
+vals <- cor_imp$value
+
+### find correlations over 0.7
+
+for (c in 1: length(vals)) {
+  
+  cv <- vals[c]
+  if ( cv > 0.7 && cv < 1){
+    cor_imp$corr[c] <- paste("true")
+  } else {
+    cor_imp$corr[c] <- paste("false")
+  }
+}
+
+
+## subset df to only correlations over 0.7
+varcors <- subset(cor_imp, corr=="true")
+
+left_vars <- varcors$var
+
+### take the variable of higher relative importance - make list of losing predictors then remove from list of variables.
+
+for (l in 1: length(left_vars)) {
+  
+  ### first separate pairwise correlations
+  ## variable 1
+  lvx <- left_vars[l]
+  
+  ## variable 2
+  ov <- varcors$variable[l]
+
+  ## variable 2 in list to find var importance value
+  ovx <- match(ov, left_vars)
+
+  if (varcors[l, 2] < varcors[ovx, 2]) {
+    
+    varcors$remove[l] <- paste(lvx)
+    
+  } else { 
+    
+    varcors$remove[l] <- paste(ov)
+    
+  }
+  
+}
+
+## remove any variables that are correlated
+vb <- unique(varcors$remove)
+sd <- vars %in% vb
+del <- vars[!sd]
+del ## remaining variables to use - subset from preds dataframe
+
+resx <- subset(cor_imp, var %in% del)
+resx <- resx[, 1:2]
+resx <- resx[!duplicated(resx),]
+
+write.csv(resx, file="youdirectory/all_preds_for_sdms_uniform.csv")
+
+```
+
+Uniform predictor set now ready for input into SDM 
+
+#  customised predictor set. 
+#  this is a little more complex as different predictors are taken for each species
+
+```{r}
+
+
+#  get list of all predictors
+
+setwd("youdirectory/climaterasters")
+cp <- list.files(pattern=".tif")
+
+
+setwd("youdirectory/hydrologyrasters")
+hp <- list.files(pattern=".tif")
+
+
+setwd("youdirectory/topographyrasters")
+tp <- list.files(pattern=".tif")
+
+```
+
+loop around all species
+
+```{r}
+
+species # list of species names as in filenames
+study_area #  dataframe with all sample site coordinates
+study_area$coord_code <- paste(study_area$X, "_", study_area$Y, sep="")#  add a coord code
+
+for( i in 1: length(species)) {
+  
+  
+  # if presence only data
+  presences <- read.csv("yourdirectory/file_species1.csv") # upload file of species presences
+  
+  #  add a coord code 
+  
+  presences$coord_code <- paste(presences$X, "_", presences$Y, sep="")
+  
+  presences$species <- 1 # add column of presences
+  
+  ## merge both dataframes by coord code
+  data <- merge(study_area, presences, by="coord_code", all=T)
+  #  remove unwanted columns - coordinates and species needed only
+  data <- data[, -c(3,4,5,6)] 
+  data[is.na(data)] <- 0 ## change NAs to 0. dataframe will have binary info now
+  
+  # if presence/absence data 
+  data  <- read.csv("yourdirectory/file_species1.csv") 
+  #  convert to spatial points dataframe
+  
+  #  upload predictor data
+  
+  #  stack rasters from each category
+  
+  load(paste("yourdirectory/climate_filename", species[i], ".RData", sep="")) ## topvars climate for species i
+  canx <- topvars
+  var_list <- droplevels(canx$var)
+  var_list
+  
+  setwd("youdirectory/climaterasters")
+  
+  c <- grep(paste0(var_list, ".tif", collapse="|"),   cp)
+  cpx <- cp[c]
+  cpr <- stack(cpx)
+  
+  
+  load(paste("yourdirectory/hydrology_filename", species[i], ".RData", sep="")) ## topvars hydrology for species i
+  hanx <- topvars
+  var_list <- droplevels(hanx$var)
+  var_list
+  
+  setwd("youdirectory/hydrologyrasters")
+  
+  h <- grep(paste0(var_list, ".tif", collapse="|"),   hp)
+  hpx <- hp[h]
+  hpr <- stack(hpx)
+  
+  load(paste("yourdirectory/topography_filename", species[i], ".RData", sep="")) ## topvars topography for species i
+  tanx <- topvars
+  var_list <- droplevels(tanx$var)
+  var_list
+  
+  setwd("youdirectory/topographyrasters")
+  
+  t <- grep(paste0(var_list, ".tif", collapse="|"),   tp)
+  tpx <- tp[t]
+  tpr <- stack(tpx)
+  
+  preds <- stack(cpr,hpr.tpr)
+  
+  coordinates(data) <- C("X", "Y")
+  #  extract environmental data from rasters at sampling sites
+  sx2 <-raster::extract(preds,data) ## extract info from environamtal raster at sampling sites
+  df <- cbind(data, sx2) ## combine data for species and variables, creates format dataframe as needed for brt
+  df <- na.omit(df)
+  
+  
+  tbrt <- gbm.step(df, gbm.x = 4:6, gbm.y = 3, family ="bernoulli", tree.complexity = 5, learning.rate = 0.0001, bag.fraction = 0.5) 
+  
+  var_imp <- as.data.frame(summary(tbrt)) # Variable importance dataframe
+  
+  tbrt$cv.statistics$cv.threshold #  BRT coefficients
+  
+  #  puts coefficients information in a dataframe
+  coefs[1,1] <- "species name" #  add species name
+  coefs[1,2] <- tbrt$n.trees
+  coefs[1,3] <- tbrt$cv.statistics$deviance.mean
+  coefs[1,4] <- tbrt$cv.statistics$correlation.mean
+  coefs[1,5] <- tbrt$cv.statistics$discrimination.mean
+  coefs[1,6] <- tbrt$cv.statistics$cv.threshold
+  
+  #  save both 
+  
+  save(var_imp2, file=paste("yourdirectory/filename_var_imp2_", species[i],".RData", sep=""))
+  save(coefs2, file=paste("yourdirectory/filename_coefs2_", species[i],".RData", sep=""))
+  
+  rm(var_imp)
+  rm(coefs)
+  
+  
+}
+
+
+```
+
+#  custom predictor set - merge all variable importance dataframes
+
+```{r}
+rels <- c("Climate_var1",    "hydrology_var1",  "topography_var1") # list all variables
+
+## make dataframe to add all dfs together
+b_resx <- data.frame(matrix(nrow=3, ncol=2))
+b_resx[, 1] <-  rels 
+colnames(b_resx)[1] <- "var"
+
+### format first file
+
+setwd("yourdirectory/file")
+
+#  where custom variable importance from 2nd brt run is saved
+cl <- list.files(pattern="var_imp") # list species files
+
+load(file=paste(cl[1])) ## b_res
+head(var_imp)
+length(b_res$var) ## 29
+
+b_resx <- merge(b_resx, var_imp, by="var", all=T)# merge dataframes
+b_resx <- b_resx[, c(1, 3)] # take only needed columns
+sp <- colnames(var_imp)[2] #  species name
+colnames(b_resx)[2] <- sp # add species name to new dataframe
+
+for(c in 2:length(cl)) {
+  
+  cat("Running site", c, "\n")
+  load(file=paste(cl[c])) ## var_imp ## load file
+  
+  colnames(var_imp)[1] <- "var" 
+  b_res <- var_imp[order(var_imp$var),]## order by variable name
+  
+  bx <- dim(var_imp)[1]
+  
+  sp <- colnames(var_imp)[2] ## get species name
+  
+    b_resx <- merge(b_resx, var_imp, by="var", all=T) ## combine by column
+  
+  colnames(b_resx)[1+c] <- sp ## add species name
+  
+}
+
+write.csv(b_resx, "yourdirectory/all_var_imp_custom.csv")
+
+
+```
+
+#  customised predictor set correlation analysis, one analysis for each species
+
+```{r}
+
+### variable importance data  
+setwd("youdirectory/")
+
+all_preds <- read.csv("yourdirectory/all_var_imp_custom.csv")
+all_preds <- all_preds[, -1]
+
+## make df for correlation
+vdf <- data.frame(matrix(nrow=3, ncol=1))
+vdf[,1] <- all_preds[, 1] # add variables as first column
+
+colnames(vdf)[1] <- "Variables"
+
+```
+
+Correlation for all species 
+
+```{r}
+species # list of species
+
+for(t in 1:length(species)) {
+  
+  
+  topvars <- all_preds[, c(1, 1+t)]
+  
+  topvars <- na.omit(topvars)
+  
+  var_list <- all_preds[, 1] # list all variables
+  
+
+  ### extract variable data
+  setwd("youdirectory/climaterasters")
+  
+  c <- grep(paste0(var_list, ".tif", collapse="|"),   cp)
+  cpx <- cp[c]
+  cpr <- stack(cpx)
+  
+  
+  setwd("youdirectory/hydrologyrasters")
+  
+  h <- grep(paste0(var_list, ".tif", collapse="|"),   hp)
+  hpx <- hp[h]
+  hpr <- stack(hpx)
+  
+  
+  setwd("youdirectory/topographyrasters")
+  
+  t <- grep(paste0(var_list, ".tif", collapse="|"),   tp)
+  tpx <- tp[t]
+  tpr <- stack(tpx)
+  
+  #  stack all predictors
+  preds <- stack(cpr,hpr.tpr)
+  
+  #  predi tors as data frame
+  preds_df <- as.data.frame(preds)
+  preds_df <- na.omit(preds_df)
+  
+  df2 = cor(preds_df)
+  
+  df2 <- as.data.frame(df2)
+  
+  
+  df2$var <- rownames(df2)
+  cor_imp <- merge(topvars, df2, by="var")
+  
+  ## make dataframe in order of relative importance
+  cor_imp <- cor_imp[order(cor_imp[,2], decreasing=TRUE),]
+  
+  ## remove minus signs from data frame 
+  cor_imp[] <- lapply(cor_imp, function(x) gsub("-", "", x ))
+  ## change from character to number
+  cor_imp[, 2:4] <- lapply(cor_imp[,2:4], function(x) as.numeric(as.character(x)))
+  
+  #  indexing in cor_imp[, 2:4] will need to be adjusted according to your dataframe dimensions
+  ### if over 0.7 take the variable with the higher importance
+  
+  ## reshape dataframe
+  
+  colnames(cor_imp)[2] <- "importance"
+  cor_imp <- melt(cor_imp, id=c("var", "importance"))
+  cor_imp$importance2 <- NA
+  
+  v <- cor_imp$var
+  ## df column for importance of variable 2 
+  for(d in 1: length(v)) {
+    
+    v1 <- v[d]
+    imp <- cor_imp$importance[d] 
+    v2 <- cor_imp$variable %in% v1
+    cor_imp$importance2[v2] <- paste(imp)
+    
+  }
+  
+  
+  cor_imp <- na.omit(cor_imp)
+  
+  vals <- cor_imp$value
+  
+  ### find correlations over 0.7
+  
+  for (c in 1: length(vals)) {
+    
+    cv <- vals[c]
+    if ( cv > 0.7 && cv < 1){
+      cor_imp$corr[c] <- paste("true")
+    } else {
+      cor_imp$corr[c] <- paste("false")
+    }
+  }
+  
+  
+  ## subset df to only correlations over 0.7
+  varcors <- subset(cor_imp, corr=="true")
+  
+  left_vars <- varcors$var
+  
+  ### take the variable of higher relative importance - make list of losing predictors then remove from list of variables.
+  
+  for (l in 1: length(left_vars)) {
+    
+    ### first separate pairwise correlations
+    ## variable 1
+    lvx <- left_vars[l]
+    
+    ## variable 2
+    ov <- varcors$variable[l]
+    
+    ## variable 2 in list to find var importance value
+    ovx <- match(ov, left_vars)
+    
+    if (varcors[l, 2] < varcors[ovx, 2]) {
+      
+      varcors$remove[l] <- paste(lvx)
+      
+    } else { 
+      
+      varcors$remove[l] <- paste(ov)
+      
+    }
+    
+  }
+  
+  ## remove any variables that are correlated
+  vb <- unique(varcors$remove)
+  sd <- vars %in% vb
+  del <- vars[!sd]
+  del ## remaining variables to use - subset from preds dataframe
+  
+  
+  ## subset from cor df and remove duplicates
+  resx <- subset(cor_imp, var %in% del)
+  resx <- resx[, 1:2]
+  resx <- resx[!duplicated(resx),]
+  
+  
+  ## merge with all species variable importance
+  colnames(resx)[2] <- paste(colnames(sp1)[2])
+  vdf <- merge(vdf, resx, by.x = "Variables", by.y = "var", all =T)
+  
+} 
+  
+
+write.csv(vdf, file="youdirectory/preds_for_sdms_custom.csv")
+
+```
+
+Custom predictor set now ready for input into SDM 
